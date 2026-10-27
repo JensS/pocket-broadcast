@@ -1,0 +1,33 @@
+{
+    "name": "pocket-broadcast",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Small Pusher protocol service for Laravel Echo on shared hosting",
+    "engines": {
+        "node": ">=24.0.0"
+    },
+    "scripts": {
+        "start": "node app.cjs",
+        "test": "node --test test/*.test.cjs",
+        "check:runtime": "\"$npm_node_execpath\" scripts/check-runtime.cjs",
+        "create-app": "node scripts/create-app.cjs",
+        "smoke": "node scripts/smoke.cjs"
+    },
+    "dependencies": {
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "pusher": "^5.2.0",
+        "pusher-js": "^8.4.0",
+        "laravel-echo": "^2.2.0"
+    },
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/JensS/pocket-broadcast.git"
+    },
+    "bugs": {
+        "url": "https://github.com/JensS/pocket-broadcast/issues"
+    },
+    "homepage": "https://github.com/JensS/pocket-broadcast#readme"
+}
