@@ -20,13 +20,13 @@ async function fixture(context) {
     const databaseFile = path.join(directory, 'state.sqlite');
     const workers = [];
     const clients = [];
-    context.after(() => {
+    context.after(async () => {
         for (const client of clients) client.terminate();
-        for (const worker of workers) worker.close();
+        await Promise.all(workers.map(worker => worker.close()));
         rmSync(directory, { recursive: true, force: true });
     });
     async function worker(port = 0) {
-        const service = createService({ apps, databaseFile, pollMs: 10 });
+        const service = createService({ apps, databaseFile, pollMs: 10, shutdownDrainMs: 0 });
         workers.push(service);
         service.server.listen(port, '127.0.0.1');
         await once(service.server, 'listening');
@@ -202,7 +202,7 @@ test('Echo + official pusher-js subscribes, receives private/presence events and
     assert.deepEqual(members, [{ name: 'Echo' }]);
     const subscribedAgain = bound(channel.subscription, 'pusher:subscription_succeeded');
     const port = worker.port;
-    worker.close();
+    await worker.close();
     worker = await f.worker(port);
     await subscribedAgain;
     const after = new Promise(resolve => channel.listen('.AfterRestart', resolve));

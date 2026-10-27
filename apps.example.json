@@ -6,6 +6,7 @@
         "origins": ["https://your-app.example"],
         "maxConnections": 100,
         "publishPerSecond": 20,
-        "clientEvents": false
+        "clientEvents": false,
+        "webhooks": []
     }
 ]

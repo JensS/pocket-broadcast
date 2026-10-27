@@ -1,33 +1,39 @@
 # Pocket Broadcast
 
-A small, independently deployed Pusher-protocol service for Laravel Echo on shared Node hosting, including netcup/Plesk. Laravel, its database and channel authorization stay on the PHP webspace. It runs as a standalone application alongside your Laravel projects.
+A small, self-hosted WebSocket service for **Laravel Echo and the Pusher protocol**. It is designed for applications that need realtime notifications on a single Node.js server without running Redis, MySQL, or a separate message broker.
 
-**Status:** initial implementation, not a full Pusher replacement. Run the tests and the hosting smoke check before using it. Production needs a dedicated hostname with a trusted certificate. The earlier preflight proved plain WebSockets and restart recovery, not production TLS or capacity.
+Pocket Broadcast supports multiple isolated apps, public/private/presence channels, cross-process delivery through SQLite, signed publishing, lifecycle webhooks, and the official Pusher SDKs. Laravel remains responsible for authentication, channel authorization, and authoritative application state.
 
-Verified on 2026-10-27: ten local integration tests pass using the official Pusher server/client SDKs and Laravel Echo, including routing between workers, signed requests, private/presence channels, client whispers, app isolation and reconnect/resubscribe after restart. The standalone smoke script passes locally. The production dependency audit reports no known vulnerabilities. Netcup's live Passenger application returns a healthy response using Node 26.12.1 and SQLite 3.54.0; private config/database URLs return 404. The hosted private-channel smoke test passes with nginx Proxy mode disabled. The official client also reconnects, reauthorizes, resubscribes and receives an event after a real panel restart. Hosting tests used synthetic data over plain WebSockets; production WSS is not yet verified. These checks do not establish production capacity or long-term availability.
+> **Best-effort delivery:** Pocket Broadcast is a live notification service, not a durable event log or a complete Pusher replacement. Clients must reload authoritative state after reconnecting.
 
-## Supported scope
+## Features
 
-- Pusher WebSocket protocol 7; public, private and presence channels.
-- Laravel Echo `channel`, `private`, `join`, notifications and `toOthers` socket exclusion.
-- Signed `POST /apps/{id}/events` and `/batch_events` using official Pusher server SDKs.
-- Optional `client-*` events / Echo whispers on authorized private or presence channels (`clientEvents: true`). Off by default.
-- Multiple isolated apps, exact browser-origin allowlists, heartbeat, message-size, connection and rate limits.
-- Presence deduplicates multiple tabs for the same user. Membership is removed on disconnect or after a dead worker's lease expires.
+- Pusher WebSocket protocol 7 and Laravel Echo.
+- Public, private, and presence channels, including multi-tab presence deduplication.
+- Signed single and batch publishing through official Pusher server SDKs.
+- Multiple apps with separate credentials, browser-origin allowlists, and resource limits.
+- Cross-worker fanout using a shared local SQLite database.
+- Optional client events and Echo whispers, disabled by default.
+- Optional 60-second publish idempotency.
+- Signed channel, presence-user, and operational-stat inspection endpoints.
+- Optional signed lifecycle webhooks with bounded retries.
+- JSON logs, health/readiness checks, a local status command, and a benchmark script.
+- Graceful restarts using WebSocket close code `1012 Service Restart`.
 
-Not implemented: encrypted/cache channels, HTTP/SockJS fallbacks, user sign-in, webhooks, channel-inspection REST endpoints, event replay, durable delivery or Pusher's extended `info` response. REST publishing uses JSON bodies, as Laravel's SDK does. Unsupported endpoints return 404. Do not enable SDK features outside this scope.
+### Intentionally unsupported
 
-## Why SQLite
+Encrypted/cache channels, HTTP/SockJS fallback transports, Pusher user authentication, event history/replay, durable realtime delivery, multi-server deployments, and Pusher SDK features outside the documented API surface. Unsupported routes return `404`.
 
-Passenger may route a publish request and its subscribers to different processes. Each process uses the **same absolute SQLite file on local disk**, with WAL locking, for a short event queue, connection limits and presence membership. No Redis, MySQL account or separate background daemon is needed. The browser uses WebSockets; workers check this queue every 250 ms, adding up to roughly that interval to delivery latency.
+## Requirements
 
-Events expire after 60 seconds; the publishing queue is capped at 5,000 rows (publish returns 503 when full). Connection/presence rows and lifecycle notifications also use this database. Disk usage depends on the high-water mark, WAL checkpointing and churn. It is for modest traffic, not a substitute for a dedicated broker. SQLite must be on a filesystem supporting SQLite locking/WAL; **do not put it on S3 or a network filesystem**. Benchmark your intended traffic. Node's built-in SQLite API may emit an experimental warning.
+- Node.js **24 or newer** with `node:sqlite` and npm.
+- One server with a persistent local filesystem supporting SQLite WAL and locking.
+- A process manager capable of running `app.cjs` and sending `SIGTERM` on shutdown.
+- For production: HTTPS/WSS through a trusted reverse proxy that supports WebSocket upgrades.
 
-A worker heartbeats its lease every 10 seconds. Other workers reap leases older than 45 seconds. A stalled/retired worker closes its connections rather than silently continuing with stale membership. Presence may therefore lag a hard crash by about 45–55 seconds. If all workers stop, cleanup occurs when a new worker starts.
+Multiple Node processes on the **same server** can share one installation. Do not use network filesystems, object storage, ephemeral deployment directories, or multiple servers with separate SQLite files.
 
-## Local setup
-
-Requires Node **24+** with `node:sqlite` and npm.
+## Quick start
 
 ```sh
 git clone https://github.com/JensS/pocket-broadcast.git
@@ -38,76 +44,70 @@ npm run create-app -- demo http://localhost:5173
 npm start
 ```
 
-App credentials are saved in ignored `apps.json` with mode 0600. Each app gets a separate key and secret. Add multiple origins as additional arguments. Restart all workers after editing app configuration. Keep only the public key in browser code; the secret belongs in Laravel's server environment and this service's private config.
-
-Optional environment variables:
-
-| Variable | Default |
-|---|---|
-| `PORT` | `3000` locally; Passenger manages the actual listening socket |
-| `REALTIME_APPS_FILE` | `apps.json` beside `app.cjs` |
-| `REALTIME_DATA_DIR` | `var/` beside `app.cjs` |
-
-Every worker **must use the same config and data directory**. Keep them outside the public document root and deployment cleanup paths. Do not run two differently configured services against the same data directory. File permissions protect them from other hosting users, not from other applications using the same hosting account.
-
-## netcup / Plesk deployment
-
-### Automatic deployments
-
-The GitHub workflow tests pushes to `main` on Node 24 and 26. After both pass,
-it publishes the source plus locked production dependencies to the generated
-`plesk-deploy` branch. Failed tests do not update that branch. Do not edit it by
-hand; `DEPLOYED_REVISION` records the source commit.
-
-In Plesk's Git extension, connect this repository over HTTPS, select
-`plesk-deploy`, and choose automatic deployment to the application root. Add its
-generated webhook URL as a GitHub **push** webhook with SSL verification enabled.
-Use an additional deployment action to create `tmp/restart.txt` in the application
-root so Passenger reloads it. Keep `.plesk.startup.cjs`, `apps.json` and `var/`
-untracked; the published branch contains none of these runtime files. No npm
-command or GitHub SSH key is needed on the hosting server. For example, with an
-application root `/pocket-broadcast`, the deployment action can be:
+The service listens on port `3000` by default. `create-app` writes generated credentials to the ignored `apps.json` file with mode `0600`. Add more allowed browser origins as additional arguments:
 
 ```sh
-cd /pocket-broadcast && mkdir -p tmp && touch tmp/restart.txt && curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 2 --max-time 10 https://broadcast.example.com/healthz
+npm run create-app -- shop https://shop.example https://www.shop.example
 ```
 
-Replace the path and hostname with your own. Check Plesk's deployment status if
-this command fails; GitHub's successful build alone does not confirm deployment.
+Each app needs its own key and secret. Only the public key belongs in browser code. Restart all workers after changing application configuration.
 
-This is file deployment, not a zero-downtime release switch. Existing WebSockets
-may reconnect during restart. Roll back by reverting the source commit on `main`;
-the revert goes through the same tests and deployment. An HTTP health check should
-be part of the host's deployment actions.
+## Configuration
 
-### Initial setup
+Environment variables:
 
-Use a **separate subdomain and app directory**; do not switch the Laravel domain away from Apache.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP and WebSocket listening port |
+| `REALTIME_APPS_FILE` | `apps.json` beside `app.cjs` | Application configuration file |
+| `REALTIME_DATA_DIR` | `var/` beside `app.cjs` | Persistent SQLite directory |
 
-1. Create the subdomain and set its document root to the service's empty `public/` directory. Keep `apps.json`, source and SQLite files outside that root. Install and select a valid certificate for this hostname.
-2. Upload this directory, excluding `node_modules`, `test`, local `var`, and sample credentials. Transfer the generated `apps.json` privately. Keep a backup of it.
-3. Find **Node.js** through Plesk's global search (the domain dashboard may hide its link). Select Node 24+; set the application root to this directory and the startup file to **app.cjs**. Run `npm ci --omit=dev --ignore-scripts` through the package command runner, then `npm run check:runtime`.
-4. Under **Apache & nginx settings**, disable **Proxy mode** for this subdomain. Enable Node. If Plesk's automatic configuration is used, inspect its generated startup wrapper and make sure it loads `app.cjs`. Remove/rename only the default placeholder `public/index.html`, if one exists.
-5. Set `REALTIME_DATA_DIR` to an absolute private directory outside any release checkout. Do the same for `REALTIME_APPS_FILE` if deploying by replacing directories. The Node process and SSH can see different absolute paths; use the paths visible to the panel runtime.
-6. Verify `https://realtime.example/healthz` and run the remote smoke test below. Test with at least two app credentials and origins before expanding use.
+Every worker must use the **same absolute configuration and data paths**. Keep both outside the public document root and outside directories replaced during deployment.
 
-No PM2, cron, Supervisor or `node` in the SSH PATH is required. The panel also omits `node` from npm scripts’ PATH; `check:runtime` uses npm’s `npm_node_execpath` to handle this (POSIX shells). The panel runs npm and Passenger starts the application on demand. Never download/install dependencies during an HTTP request. Restart through **App neu starten** after code or config updates. Connections drop and Echo reconnects/resubscribes automatically.
+Example application entry:
 
-### Remote smoke test
+```json
+{
+    "id": "shop",
+    "key": "public-random-key",
+    "secret": "private-random-secret-at-least-32-characters",
+    "origins": ["https://shop.example"],
+    "maxConnections": 100,
+    "publishPerSecond": 20,
+    "clientEvents": false,
+    "webhooks": []
+}
+```
 
-From this directory locally (with dev dependencies installed), provide a private config containing a dedicated test app. The script reads its first entry and never prints the secret:
+See [`apps.example.json`](apps.example.json) for the complete starting shape.
+
+## Production deployment
+
+1. Deploy the source and install production dependencies:
+
+   ```sh
+   npm ci --omit=dev --ignore-scripts
+   npm run check:runtime
+   ```
+
+2. Configure one or more apps and set `REALTIME_APPS_FILE` and `REALTIME_DATA_DIR` to persistent private paths.
+3. Start `app.cjs` with Node.js 24+ under your process manager.
+4. Proxy both HTTP and WebSocket traffic to the configured port. Enable TLS and preserve the WebSocket `Upgrade` and `Connection` headers.
+5. Set proxy idle timeouts comfortably above the 25-second heartbeat interval.
+6. Send `SIGTERM` for graceful stops and restart all workers after code or configuration changes.
+7. Verify `/healthz`, `/readyz`, and the remote smoke test before sending production traffic.
+
+Do not install dependencies during HTTP requests. Ensure the hosting account's file permissions prevent unrelated applications from reading credentials or SQLite data.
+
+## Connect Laravel
+
+Install the official Pusher server SDK in the Laravel application:
 
 ```sh
-REALTIME_TEST_CONFIG=/private/path/test-app.json \
-REALTIME_TEST_URL=https://realtime.example \
-npm run smoke
+composer require pusher/pusher-php-server
 ```
 
-It opens a WebSocket using that app's first allowed origin, subscribes to a private channel using the official server SDK's authorization, publishes a signed event and checks delivery. HTTPS validation stays enabled. The script also supports `http://` for synthetic preflight testing only; production browsers on HTTPS require WSS.
-
-## Laravel connection
-
-Install `pusher/pusher-php-server` in each Laravel app if it is not already present. Configure a `pusher` broadcasting connection using that app's credentials:
+Configure a Pusher broadcasting connection:
 
 ```php
 'pusher' => [
@@ -122,17 +122,36 @@ Install `pusher/pusher-php-server` in each Laravel app if it is not already pres
         'scheme' => 'https',
         'useTLS' => true,
     ],
-    'client_options' => ['connect_timeout' => 2, 'timeout' => 5],
+    'client_options' => [
+        'connect_timeout' => 2,
+        'timeout' => 5,
+    ],
 ],
 ```
 
-Set `BROADCAST_CONNECTION=pusher`, `PUSHER_HOST=realtime.example`, and the three matching credentials in the server environment. Keep `/broadcasting/auth` on Laravel and use normal authenticated channel callbacks in `routes/channels.php`; never authorize channels based solely on a submitted user ID.
+Set the corresponding server environment values:
 
-For immediate lightweight notifications, implement **`ShouldBroadcastNow`**. Ordinary `ShouldBroadcast` events remain subject to the app's queue, including the every-minute netcup cron delay. Publish only after the associated database transaction commits (for example, dispatch from `DB::afterCommit`). A failed synchronous publish must not invalidate an already completed payment/order operation: handle/report the failure appropriately and let clients refresh authoritative state.
+```dotenv
+BROADCAST_CONNECTION=pusher
+PUSHER_HOST=realtime.example
+PUSHER_APP_ID=shop
+PUSHER_APP_KEY=public-random-key
+PUSHER_APP_SECRET=private-random-secret
+```
 
-## Echo client
+Keep `/broadcasting/auth` in Laravel and use normal authenticated callbacks in `routes/channels.php`. Never authorize a channel solely from a submitted user ID.
 
-Install `laravel-echo` and `pusher-js` in the Laravel frontend build. Build assets locally, as with the other netcup projects.
+Publish after the surrounding database transaction commits. For immediate notifications, use `ShouldBroadcastNow` when appropriate; ordinary queued broadcasts still depend on the Laravel queue. Handle publish failures without invalidating an already committed business operation.
+
+## Connect Echo
+
+Install the browser dependencies:
+
+```sh
+npm install laravel-echo pusher-js
+```
+
+Example Echo configuration:
 
 ```js
 import Echo from 'laravel-echo';
@@ -161,18 +180,146 @@ echo.private(`orders.${userId}`).listen('.OrderUpdated', refreshOrders);
 echo.connector.pusher.connection.bind('connected', refreshOrders);
 ```
 
-Configure each actual page origin (`https://app.example`, and `https://www.app.example` if used) in that app's `origins`. They are exact matches; no wildcard and no missing Origin are accepted. Origin filtering is not authentication: public channels are public. Private/presence channel authorization supplies access control.
+Every actual page origin must appear in that app's `origins`. Origins are exact matches: wildcards and missing origins are rejected. Origin checks are not authentication; private/presence authorization still supplies access control.
 
-## Operational limits
+## HTTP API
 
-Defaults per app: 100 concurrent sockets, 20 publish requests/second. Limits are shared between workers. Each publish can target at most 100 channels; a batch can contain at most 10 events. Event data is limited to 10 KiB. Each socket has at most 50 subscriptions, 30 inbound messages/second and optionally 10 client events/second. Presence channels support 100 distinct users. Slow sockets with over 1 MiB queued output are disconnected. There is also a global cap of 2,000 sockets per database.
+App-specific endpoints use normal Pusher-signed HTTP authentication.
 
-The service is **best effort live notification delivery**. An accepted HTTP publish is not an acknowledgement from every recipient. Restarted/disconnected clients must fetch current state from Laravel. Use your application database as the source of truth; do not depend on WebSocket events for payment processing or other durable work. Monitor `/healthz`, disk usage, publish failures and client reconnect rates. The host's connection/CPU limits still apply.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/apps/{id}/events` | Publish one event |
+| `POST` | `/apps/{id}/batch_events` | Publish up to 10 events |
+| `GET` | `/apps/{id}/channels` | List occupied channels and subscription counts |
+| `GET` | `/apps/{id}/channels/{channel}` | Inspect one occupied channel |
+| `GET` | `/apps/{id}/channels/{channel}/users` | List distinct users in a presence channel |
+| `GET` | `/apps/{id}/stats` | Shared SQLite state and current-worker counters |
 
-Protocol references: [WebSocket protocol](https://pusher.com/docs/channels/library_auth_reference/pusher-websockets-protocol/), [HTTP signatures](https://pusher.com/docs/channels/library_auth_reference/rest-api/), [channel authorization](https://pusher.com/docs/channels/library_auth_reference/auth-signatures/).
+`GET /apps/{id}/channels` supports `filter_by_prefix`, for example `?filter_by_prefix=presence-`. Inspection APIs are for diagnostics and administration, not high-frequency polling.
 
-## Contributing and license
+Public operational endpoints:
 
-MIT licensed. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test expectations and useful areas to improve, and [SECURITY.md](SECURITY.md) for security reports. Pocket Broadcast is an independent project and is not affiliated with Pusher or Laravel.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Process and database liveness |
+| `GET` | `/readyz` | Admission state and fresh worker lease |
 
-App credentials, runtime databases and dependencies are ignored. The npm package is marked `private` to prevent accidental registry publishing; the source is available under the MIT license on GitHub.
+## Idempotent publishing
+
+Add an `idempotency_key` to an event or batch item:
+
+```json
+{
+    "name": "OrderUpdated",
+    "channel": "private-orders.42",
+    "data": "{\"status\":\"paid\"}",
+    "idempotency_key": "order-42-paid"
+}
+```
+
+Alternatively, set `X-Idempotency-Key` to identify the complete HTTP request.
+
+Keys must contain 1–128 characters without control characters. A retry using the same key and payload returns `200` without publishing again. Reusing a key with a different payload returns `409`. Keys are hashed before storage and expire after **60 seconds**.
+
+Idempotency reduces duplicate notifications during retries; it does not provide durable delivery or permanent deduplication.
+
+## Lifecycle webhooks
+
+Webhooks are disabled by default. Configure up to five endpoints per app:
+
+```json
+{
+    "url": "https://shop.example/webhooks/pocket-broadcast",
+    "events": ["channel_occupied", "channel_vacated", "member_added", "member_removed"],
+    "secret": "a-separate-random-webhook-secret-of-at-least-32-characters"
+}
+```
+
+The optional webhook secret defaults to the app secret. Endpoints require HTTPS, except loopback HTTP for local testing. Redirects are not followed.
+
+Each request contains a Pusher-style `time_ms` and `events` body plus a stable top-level `id`. Verify the raw-body HMAC-SHA256 hex signature in `X-Pusher-Signature`. `X-Pusher-Key` identifies the app, and `X-Pocket-Event-Id` supports receiver deduplication.
+
+Delivery is **at-least-once**. Receivers must deduplicate, return quickly, and tolerate retries. Failed or non-2xx deliveries receive at most three attempts with short exponential backoff. Each app has a 500-job pending queue; excess lifecycle webhooks are dropped rather than blocking realtime traffic. Dead jobs are retained for 24 hours.
+
+Webhooks can be lost after crashes, queue saturation, or exhausted retries. Never treat them as authoritative business state.
+
+## Operations
+
+### Status and logs
+
+```sh
+npm run status
+```
+
+The status command reports workers, connections, channels, presence, event backlog, idempotency records, webhook backlog, and database size without exposing an administrative web page.
+
+Logs are newline-delimited JSON with timestamps, levels, and contextual fields. Secrets, signatures, and event payloads are not intentionally logged.
+
+### Remote smoke test
+
+Create a private test configuration containing a dedicated test app, then run from a checkout with development dependencies installed:
+
+```sh
+REALTIME_TEST_CONFIG=/private/path/test-app.json \
+REALTIME_TEST_URL=https://realtime.example \
+npm run smoke
+```
+
+The script reads the first app, opens a WebSocket using its first allowed origin, authorizes a private channel, publishes a signed event, and verifies delivery. It never prints the secret. HTTPS certificate validation remains enabled.
+
+### Benchmark
+
+```sh
+npm run benchmark
+BENCH_CONNECTIONS=500 BENCH_EVENTS=200 npm run benchmark
+```
+
+The benchmark uses two local workers and reports publish-to-delivery p50/p95/p99 latency. Results depend on the machine and workload and are not a production capacity guarantee.
+
+### Shutdown behavior
+
+A normal shutdown stops new admission, allows a one-second drain, closes sockets with `1012 Service Restart`, cleans shared worker state, and processes a bounded batch of due webhook work. Echo should reconnect, resubscribe, and refresh application state.
+
+## Limits and delivery semantics
+
+| Limit | Default |
+| --- | --- |
+| Apps per configuration | 20 |
+| Connections per app | 100, configurable |
+| Total connections per database | 2,000 |
+| Connection attempts | 20/second/app |
+| Publish requests | 20/second/app, configurable |
+| Channels per publish | 100 |
+| Events per batch | 10 |
+| Event data | 10 KiB |
+| Subscriptions per socket | 50 |
+| Inbound messages per socket | 30/second |
+| Client events per socket | 10/second, when enabled |
+| Presence users per channel | 100 distinct users |
+| Slow-consumer output buffer | 1 MiB |
+| Event queue | 5,000 rows globally |
+| Event and idempotency retention | 60 seconds |
+| Pending webhook jobs | 500/app |
+
+Workers poll SQLite every 250 ms, adding up to roughly that interval to delivery latency. Events are ephemeral routing records, not history. The queue returns `503` when full. Worker leases are checked every 10 seconds and stale leases expire after 45 seconds; presence cleanup after a hard crash can therefore take about 45–55 seconds.
+
+An accepted publish does not acknowledge recipient delivery. Monitor readiness, queue depth, disk usage, publish failures, webhook backlog, and reconnect rates. Keep Laravel's database as the source of truth and never depend on realtime delivery alone for payments, orders, or other durable workflows.
+
+## Development and verification
+
+```sh
+npm ci
+npm run check:runtime
+npm test
+npm run benchmark
+```
+
+The integration suite uses official Pusher server/client SDKs and Laravel Echo. It covers cross-worker routing, authorization, presence, app isolation, reconnects, inspection, idempotency, webhook signatures/retries, and graceful shutdown. Tests use temporary databases and loopback listeners with synthetic credentials.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and [SECURITY.md](SECURITY.md) for security reports.
+
+Protocol references: [Pusher WebSocket protocol](https://pusher.com/docs/channels/library_auth_reference/pusher-websockets-protocol/), [HTTP signatures](https://pusher.com/docs/channels/library_auth_reference/rest-api/), and [channel authorization](https://pusher.com/docs/channels/library_auth_reference/auth-signatures/).
+
+## License
+
+MIT. Pocket Broadcast is an independent project and is not affiliated with Pusher or Laravel.

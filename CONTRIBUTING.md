@@ -12,7 +12,7 @@ npm run check:runtime
 npm test
 ```
 
-The tests create temporary databases and listen only on loopback interfaces. They use synthetic credentials and the official Pusher SDKs and Laravel Echo. No hosting account is required. To try a real installation, follow the README's remote smoke test using a dedicated test app.
+The tests create temporary databases and listen only on loopback interfaces. They use synthetic credentials and the official Pusher SDKs and Laravel Echo. No hosting account is required. To try a real installation, follow the README's remote smoke test using a dedicated test app. Use `npm run benchmark` for a reproducible local two-worker latency baseline; document its connection/event parameters when reporting results.
 
 ## Pull requests
 
