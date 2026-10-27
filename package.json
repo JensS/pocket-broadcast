@@ -11,7 +11,9 @@
         "test": "node --test test/*.test.cjs",
         "check:runtime": "\"$npm_node_execpath\" scripts/check-runtime.cjs",
         "create-app": "node scripts/create-app.cjs",
-        "smoke": "node scripts/smoke.cjs"
+        "smoke": "node scripts/smoke.cjs",
+        "status": "node scripts/status.cjs",
+        "benchmark": "node scripts/benchmark.cjs"
     },
     "dependencies": {
         "ws": "^8.18.0"
