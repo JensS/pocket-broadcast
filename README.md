@@ -65,7 +65,15 @@ generated webhook URL as a GitHub **push** webhook with SSL verification enabled
 Use an additional deployment action to create `tmp/restart.txt` in the application
 root so Passenger reloads it. Keep `.plesk.startup.cjs`, `apps.json` and `var/`
 untracked; the published branch contains none of these runtime files. No npm
-command or GitHub SSH key is needed on the hosting server.
+command or GitHub SSH key is needed on the hosting server. For example, with an
+application root `/pocket-broadcast`, the deployment action can be:
+
+```sh
+cd /pocket-broadcast && mkdir -p tmp && touch tmp/restart.txt && curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 2 --max-time 10 https://broadcast.example.com/healthz
+```
+
+Replace the path and hostname with your own. Check Plesk's deployment status if
+this command fails; GitHub's successful build alone does not confirm deployment.
 
 This is file deployment, not a zero-downtime release switch. Existing WebSockets
 may reconnect during restart. Roll back by reverting the source commit on `main`;
