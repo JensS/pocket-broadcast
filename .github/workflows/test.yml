@@ -1,5 +1,9 @@
-name: Tests
-on: [push, pull_request]
+name: Tests and deployment
+on:
+  push:
+    branches-ignore: [plesk-deploy]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -17,3 +21,24 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:runtime
       - run: npm test
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: plesk-deployment
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - name: Publish tested source and production dependencies
+        env:
+          DEPLOYMENT_BRANCH: plesk-deploy
+        run: bash scripts/publish-deployment.sh

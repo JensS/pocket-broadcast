@@ -52,6 +52,28 @@ Every worker **must use the same config and data directory**. Keep them outside 
 
 ## netcup / Plesk deployment
 
+### Automatic deployments
+
+The GitHub workflow tests pushes to `main` on Node 24 and 26. After both pass,
+it publishes the source plus locked production dependencies to the generated
+`plesk-deploy` branch. Failed tests do not update that branch. Do not edit it by
+hand; `DEPLOYED_REVISION` records the source commit.
+
+In Plesk's Git extension, connect this repository over HTTPS, select
+`plesk-deploy`, and choose automatic deployment to the application root. Add its
+generated webhook URL as a GitHub **push** webhook with SSL verification enabled.
+Use an additional deployment action to create `tmp/restart.txt` in the application
+root so Passenger reloads it. Keep `.plesk.startup.cjs`, `apps.json` and `var/`
+untracked; the published branch contains none of these runtime files. No npm
+command or GitHub SSH key is needed on the hosting server.
+
+This is file deployment, not a zero-downtime release switch. Existing WebSockets
+may reconnect during restart. Roll back by reverting the source commit on `main`;
+the revert goes through the same tests and deployment. An HTTP health check should
+be part of the host's deployment actions.
+
+### Initial setup
+
 Use a **separate subdomain and app directory**; do not switch the Laravel domain away from Apache.
 
 1. Create the subdomain and set its document root to the service's empty `public/` directory. Keep `apps.json`, source and SQLite files outside that root. Install and select a valid certificate for this hostname.
