@@ -1,0 +1,11 @@
+[
+    {
+        "id": "your-app",
+        "key": "replace-with-random-public-key",
+        "secret": "replace-with-at-least-32-random-bytes",
+        "origins": ["https://your-app.example"],
+        "maxConnections": 100,
+        "publishPerSecond": 20,
+        "clientEvents": false
+    }
+]
